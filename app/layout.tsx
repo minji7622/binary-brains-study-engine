@@ -2,7 +2,6 @@ import "katex/dist/katex.min.css";
 import "./globals.css";
 import type { Metadata } from "next";
 import { Nunito, Geist_Mono } from "next/font/google";
-import "./globals.css";
 
 const nunito = Nunito({
   variable: "--font-nunito",

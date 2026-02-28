@@ -78,6 +78,29 @@ function MD({ children }: { children: string }) {
   );
 }
 
+function getModeCallout(
+  userSelectedMode: "autopilot" | "coach",
+  recommendedMode: "autopilot" | "coach"
+): { title: string; body: string; variant: "success" | "recommend" } {
+  const modeName = (m: string) => (m === "autopilot" ? "Autopilot" : "Coach");
+  if (recommendedMode === userSelectedMode) {
+    return {
+      title: `Great choice — ${modeName(userSelectedMode)} fits your profile.`,
+      body: "",
+      variant: "success",
+    };
+  }
+  const body =
+    userSelectedMode === "coach" && recommendedMode === "autopilot"
+      ? "Coach mode is totally okay, but progress may be slower unless you increase consistency."
+      : "Autopilot is fine, but you may not need it — Coach gives you more control.";
+  return {
+    title: `Recommended: ${modeName(recommendedMode)}`,
+    body,
+    variant: "recommend",
+  };
+}
+
 export default function StudyPlannerPage() {
   const [step, setStep] = useState<StepIndex>(0);
 
@@ -108,6 +131,8 @@ export default function StudyPlannerPage() {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [diagnosticWarmingUp, setDiagnosticWarmingUp] = useState(false);
+  const [diagnosticIsFallback, setDiagnosticIsFallback] = useState(false);
 
   // Analysis (from /api/analyze-answers)
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -191,7 +216,7 @@ export default function StudyPlannerPage() {
     if (step > 0) setStep((step - 1) as StepIndex);
   };
 
-  const fetchDiagnostic = async (count: number) => {
+  const fetchDiagnostic = async (count: number): Promise<{ questions: GeneratedQuestion[]; meta?: { source?: string } }> => {
     const res = await fetch("/api/generate-diagnostic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -205,9 +230,28 @@ export default function StudyPlannerPage() {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data?.detail || data?.error || "Failed to generate.");
+      throw new Error(data?.error || data?.detail || "Failed to generate.");
     }
-    return data.questions as GeneratedQuestion[];
+    return {
+      questions: (data.questions ?? []) as GeneratedQuestion[],
+      meta: data.meta,
+    };
+  };
+
+  const looksPlaceholder = (
+    questions: GeneratedQuestion[],
+    meta?: { source?: string }
+  ): boolean => {
+    if (meta?.source === "fallback") return true;
+    if (!questions?.length) return false;
+    const optionSet = ["Option A", "Option B", "Option C", "Option D"];
+    return questions.every((q) => {
+      if (q.type !== "mcq" || !q.choices_md?.length) return true;
+      return (
+        q.choices_md.length === 4 &&
+        q.choices_md.every((c, i) => c === optionSet[i])
+      );
+    });
   };
 
   const generateDiagnostic = async () => {
@@ -215,10 +259,21 @@ export default function StudyPlannerPage() {
 
     setIsGenerating(true);
     setGenError(null);
+    setDiagnosticIsFallback(false);
 
     try {
-      const questions = await fetchDiagnostic(7);
-      const normalized = questions.map((q, idx) => ({
+      let data = await fetchDiagnostic(7);
+      let isFallback = looksPlaceholder(data.questions, data.meta);
+
+      if (isFallback) {
+        setDiagnosticWarmingUp(true);
+        await new Promise((r) => setTimeout(r, 400));
+        setDiagnosticWarmingUp(false);
+        data = await fetchDiagnostic(7);
+        isFallback = looksPlaceholder(data.questions, data.meta);
+      }
+
+      const normalized = data.questions.map((q, idx) => ({
         ...q,
         id: `${Date.now()}-${idx}`,
       }));
@@ -228,6 +283,7 @@ export default function StudyPlannerPage() {
       setAiRecommendedMode(null);
       setModeReasoning("");
       setAnalyzeError(null);
+      setDiagnosticIsFallback(isFallback);
     } catch (e: unknown) {
       setGenError(
         e instanceof Error ? e.message : "Failed to generate diagnostic."
@@ -252,6 +308,8 @@ export default function StudyPlannerPage() {
           dailyHours,
           examDate: currentSubject.examDate,
           mode,
+          subjects: subjects.map((s) => ({ name: s.name, examDate: s.examDate, difficulty: s.difficulty })),
+          projectDeadlines: projectDeadlines.map((d) => ({ title: d.title, dueDate: d.dueDate })),
         }),
       });
       const data = await res.json();
@@ -641,97 +699,121 @@ export default function StudyPlannerPage() {
 
                   {generatedQuestions && generatedQuestions.length > 0 && (
                     <div className="space-y-3">
+                      {diagnosticIsFallback && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                            Instant set
+                          </span>
+                          <button
+                            type="button"
+                            onClick={generateDiagnostic}
+                            disabled={isGenerating}
+                            className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 transition hover:bg-amber-50 disabled:opacity-50"
+                          >
+                            Regenerate
+                          </button>
+                        </div>
+                      )}
                       {generatedQuestions.map((gq, i) => {
                         const ans =
                           diagnosticAnswers[gq.id] ?? {
                             answer: "",
                             noIdea: false,
                           };
+                        const choices =
+                          gq.choices_md ??
+                          (gq as GeneratedQuestion & { choices?: string[] }).choices ??
+                          [];
+                        const isMcq = gq.type === "mcq" && choices.length >= 4;
+                        const optionLetters = ["A", "B", "C", "D"] as const;
                         return (
-                        <div
-                          key={gq.id}
-                          className="rounded-xl border-2 border-blue-200 bg-blue-50/50 p-4 space-y-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="space-y-1">
-                              <div className="text-base font-semibold text-gray-900">
-                                Question {i + 1}
+                          <div
+                            key={gq.id}
+                            className="rounded-xl border-2 border-blue-200 bg-blue-50/50 p-4 space-y-3"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1">
+                                <div className="text-base font-semibold text-gray-900">
+                                  Question {i + 1}
+                                </div>
+                                <MD>{gq.question_md ?? (gq as GeneratedQuestion & { question?: string }).question ?? ""}</MD>
                               </div>
-                              <MD>{gq.question_md}</MD>
+                              <span className="shrink-0 rounded-full bg-blue-200 px-2.5 py-1 text-sm font-semibold text-blue-800">
+                                {gq.type.toUpperCase()}
+                              </span>
                             </div>
-                            <span className="shrink-0 rounded-full bg-blue-200 px-2.5 py-1 text-sm font-semibold text-blue-800">
-                              {gq.type.toUpperCase()}
-                            </span>
-                          </div>
 
-                          {/* MCQ */}
-                          {gq.type === "mcq" && gq.choices_md ? (
-                            <div className="space-y-2">
-                              {gq.choices_md.map((choice, idx) => {
-                                const m = choice.match(/[ABCD]/);
-                                const letter = m ? m[0] : String(idx);
-                                return (
-                                  <label
-                                    key={idx}
-                                    className={`flex items-start gap-2 rounded-xl border-2 border-blue-200 bg-white px-3.5 py-2.5 hover:bg-blue-50 ${ans.noIdea ? "pointer-events-none opacity-60" : ""}`}
-                                  >
-                                    <input
-                                      type="radio"
-                                      name={`mcq-${gq.id}`}
-                                      value={letter}
-                                      checked={ans.answer === letter}
-                                      onChange={(e) =>
-                                        setAnswer(gq.id, { answer: e.target.value })
-                                      }
-                                      disabled={ans.noIdea}
-                                      className="mt-1"
-                                    />
-                                    <div className="flex-1">
-                                      <MD>{choice}</MD>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            /* Short answer */
-                            <input
-                              type="text"
-                              value={ans.answer}
-                              onChange={(e) =>
-                                setAnswer(gq.id, { answer: e.target.value })
-                              }
-                              placeholder="Your answer..."
-                              disabled={ans.noIdea}
-                              className={`w-full ${INPUT} disabled:opacity-60 disabled:cursor-not-allowed`}
-                            />
-                          )}
-
-                          {/* No idea */}
-                          <div className="space-y-1">
-                            <label className="flex items-center gap-2 text-base text-gray-900">
-                              <input
-                                type="checkbox"
-                                checked={ans.noIdea}
-                                onChange={(e) => {
-                                  const checked = e.target.checked;
+                            {isMcq ? (
+                              <div className="space-y-2" role="radiogroup" aria-label={`Question ${i + 1} options`}>
+                                {choices.slice(0, 4).map((choice, idx) => {
+                                  const letter = optionLetters[idx] ?? "A";
+                                  return (
+                                    <label
+                                      key={`${gq.id}-${idx}`}
+                                      className={`flex items-start gap-2 rounded-xl border-2 border-blue-200 bg-white px-3.5 py-2.5 hover:bg-blue-50 cursor-pointer ${ans.noIdea ? "pointer-events-none opacity-60" : ""}`}
+                                    >
+                                      <input
+                                        type="radio"
+                                        name={gq.id}
+                                        value={letter}
+                                        checked={ans.answer === letter}
+                                        onChange={() =>
+                                          setAnswer(gq.id, {
+                                            answer: letter,
+                                            noIdea: ans.noIdea,
+                                          })
+                                        }
+                                        disabled={ans.noIdea}
+                                        className="mt-1 cursor-pointer"
+                                      />
+                                      <span className="text-base font-medium text-gray-700 shrink-0">{letter}.</span>
+                                      <div className="flex-1 min-w-0">
+                                        <MD>{choice}</MD>
+                                      </div>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <textarea
+                                value={ans.answer}
+                                onChange={(e) =>
                                   setAnswer(gq.id, {
-                                    noIdea: checked,
-                                    answer: checked ? "" : ans.answer,
-                                  });
-                                }}
-                                className="h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
+                                    answer: e.target.value,
+                                    noIdea: ans.noIdea,
+                                  })
+                                }
+                                placeholder="Your answer..."
+                                disabled={ans.noIdea}
+                                rows={3}
+                                className={`w-full ${INPUT} disabled:opacity-60 disabled:cursor-not-allowed resize-y min-h-[80px]`}
                               />
-                              No idea
-                            </label>
-                            {ans.noIdea && (
-                              <p className="text-sm text-gray-600 pl-6">
-                                Marked as &apos;No idea&apos; — we&apos;ll treat this as a gap to focus on.
-                              </p>
                             )}
+
+                            <div className="space-y-1">
+                              <label className="flex items-center gap-2 text-base text-gray-900">
+                                <input
+                                  type="checkbox"
+                                  checked={ans.noIdea}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setAnswer(gq.id, {
+                                      noIdea: checked,
+                                      answer: checked ? "" : ans.answer,
+                                    });
+                                  }}
+                                  className="h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
+                                />
+                                No idea
+                              </label>
+                              {ans.noIdea && (
+                                <p className="text-sm text-gray-600 pl-6">
+                                  Marked as &apos;No idea&apos; — we&apos;ll treat this as a gap to focus on.
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
+                        );
                       })}
                     </div>
                   )}
@@ -739,9 +821,11 @@ export default function StudyPlannerPage() {
                   {isGenerating && (generatedQuestions?.length ?? 0) < 7 && (
                     <div className="space-y-3">
                       <p className="text-base text-gray-600">
-                        {generatedQuestions?.length
-                          ? "Loading remaining questions…"
-                          : "Generating adaptive questions (usually 5–10s)…"}
+                        {diagnosticWarmingUp
+                          ? "Warming up model…"
+                          : generatedQuestions?.length
+                            ? "Loading remaining questions…"
+                            : "Generating adaptive questions (taking some time)…"}
                       </p>
                       {Array.from({
                         length: 7 - (generatedQuestions?.length ?? 0),
@@ -810,47 +894,57 @@ export default function StudyPlannerPage() {
               </h2>
 
               {/* AI Recommendation: Learning Mode */}
-              {analysis && (
-                <div className={`${CARD} border-blue-200 bg-blue-50/40`}>
-                  <h3 className="text-lg font-bold text-gray-900">
-                    AI Recommendation: Learning Mode
-                  </h3>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Guidance only. Your selected mode (Setup or below) is used for your plan.
-                  </p>
-                  <p className="mt-2 text-base font-semibold text-gray-900">
-                    {analysis.recommended_mode}
-                  </p>
-                  <p className="mt-2 text-base text-gray-900">
-                    {modeReasoning || analysis.mode_reasoning}
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setMode(aiRecommendedMode ?? "autopilot")
-                      }
-                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700"
+              {analysis && (() => {
+                const recommendedMode: "autopilot" | "coach" =
+                  aiRecommendedMode ?? (analysis.recommended_mode === "Autopilot" ? "autopilot" : "coach");
+                const callout = getModeCallout(mode, recommendedMode);
+                const isMatch = recommendedMode === mode;
+                return (
+                  <div className={`${CARD} border-blue-200 bg-blue-50/40`}>
+                    <h3 className="text-lg font-bold text-gray-900">
+                      AI Recommendation: Learning Mode
+                    </h3>
+                    <p className="mt-1 text-sm text-gray-600">
+                      Guidance only. Your selected mode (Setup or below) is used for your plan.
+                    </p>
+                    <div
+                      className={`mt-4 rounded-xl border-2 p-4 text-base ${
+                        callout.variant === "success"
+                          ? "border-emerald-200 bg-emerald-50/80 text-emerald-900"
+                          : "border-blue-200 bg-blue-100/60 text-gray-900"
+                      }`}
                     >
-                      Accept Recommendation
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {}}
-                      className="rounded-xl border-2 border-blue-200 bg-white px-4 py-2.5 text-base font-semibold text-blue-700 transition hover:bg-blue-50"
-                    >
-                      Keep My Current Mode
-                    </button>
-                  </div>
-                  {aiRecommendedMode !== null && mode !== aiRecommendedMode && (
-                    <div className="mt-4 rounded-xl border-2 border-amber-200 bg-amber-50/80 p-4 text-base text-amber-900">
-                      {mode === "coach" && aiRecommendedMode === "autopilot"
-                        ? "Coach mode selected. Note: based on your diagnostic profile, progress may be slower compared to Autopilot."
-                        : "Autopilot mode selected. Note: based on your profile, Coach mode may be sufficient and more flexible."}
+                      <p className="font-semibold">{callout.title}</p>
+                      {callout.body && (
+                        <p className="mt-2 text-sm opacity-90">{callout.body}</p>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                    {(modeReasoning || analysis.mode_reasoning || "").trim() ? (
+                      <div className="mt-3 text-sm text-gray-700">
+                        <MD>{modeReasoning || analysis.mode_reasoning || ""}</MD>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {!isMatch && (
+                        <button
+                          type="button"
+                          onClick={() => setMode(recommendedMode)}
+                          className="rounded-xl bg-blue-600 px-4 py-2.5 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                        >
+                          Accept Recommendation
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {}}
+                        className="rounded-xl border-2 border-blue-200 bg-white px-4 py-2.5 text-base font-semibold text-blue-700 transition hover:bg-blue-50"
+                      >
+                        {isMatch ? "Keeping current mode" : "Keep My Current Mode"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className={CARD}>
@@ -890,13 +984,13 @@ export default function StudyPlannerPage() {
                           >
                             {w.severity}
                           </span>
-                          <span className="font-semibold text-gray-900">
-                            {w.concept_tag}
-                          </span>
+                          <div className="font-semibold text-gray-900 shrink-0 min-w-0">
+                            <MD>{w.concept_tag ?? ""}</MD>
+                          </div>
                           {w.description && (
-                            <span className="text-gray-700">
-                              — {w.description}
-                            </span>
+                            <div className="text-gray-700 min-w-0 flex-1">
+                              <MD>{`— ${w.description}`}</MD>
+                            </div>
                           )}
                         </li>
                       ))}
@@ -948,8 +1042,11 @@ export default function StudyPlannerPage() {
               {analysis?.strong_learner != null && (
                 <div className={CARD}>
                   <h3 className="text-base font-bold text-gray-900">
-                    Strong Learner
+                    Level-Up Tools
                   </h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Optional challenges that push you further once your basics are solid.
+                  </p>
                   <p className="mt-2 text-base text-gray-900">
                     {analysis.strong_learner
                       ? "Your profile suggests strong learning habits; Coach mode can help you stay in control while still getting guidance."
@@ -966,7 +1063,7 @@ export default function StudyPlannerPage() {
                     </h3>
                     <ul className="mt-2 list-inside list-disc space-y-1 text-base text-gray-900">
                       {analysis.careless_patterns.map((p, i) => (
-                        <li key={i}>{p}</li>
+                        <li key={i}><MD>{p}</MD></li>
                       ))}
                     </ul>
                   </div>
@@ -975,8 +1072,11 @@ export default function StudyPlannerPage() {
               {(!analysis || analysis.strong_learner == null) && (
                 <div className={CARD}>
                   <h3 className="text-base font-bold text-gray-900">
-                    Strong Learner Tools
+                    Level-Up Tools
                   </h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Optional challenges that push you further once your basics are solid.
+                  </p>
                   <p className="mt-2 text-base text-gray-600">
                     {analysis
                       ? "Recommended tools and techniques will appear here when available."
@@ -1045,23 +1145,23 @@ export default function StudyPlannerPage() {
                     {todayLabel}
                   </span>
                 </div>
-                <div className="mb-6 rounded-xl border-2 border-blue-200/70 bg-blue-100/80 px-4 py-3.5 text-base italic text-gray-900">
+                <div className="mb-6 rounded-xl border-2 border-blue-200/70 bg-blue-100/80 px-5 py-4 text-base italic leading-relaxed text-gray-900">
                   &ldquo;Small steps, big progress.&rdquo;
                 </div>
 
-                <div className="mb-6 border-t-2 border-blue-200/60 pt-6" aria-hidden />
+                <div className="mb-8 border-t-2 border-blue-200/60 pt-6" aria-hidden />
 
                 {/* Main grid — stacked on mobile, 2 cols on lg */}
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
                   {/* LEFT column */}
-                  <div className="space-y-5">
+                  <div className="space-y-6">
                     {/* Time Table (7-day) */}
-                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
-                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-5 text-lg font-bold text-gray-900">
                         <span className="mr-2" aria-hidden>🗓️</span>
                         Time Table (7-day)
                       </h3>
-                      <div className="space-y-3">
+                      <div className="space-y-2">
                         {(plan?.days ?? [1, 2, 3, 4, 5, 6, 7].map((d: number) => ({ day: d, focus: "", hours: 0, method: "" }))).map(
                           (row: { day: number; focus?: string; hours?: number; method?: string }) => {
                             const hours = plan?.days ? Number(row.hours) || 0 : 0;
@@ -1082,31 +1182,33 @@ export default function StudyPlannerPage() {
                             return (
                               <div
                                 key={row.day}
-                                className="flex items-start gap-3 rounded-xl border-2 border-blue-100 bg-blue-50/50 p-3.5 shadow-sm transition-shadow duration-200 hover:shadow-md"
+                                className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50/50 px-2 py-2 shadow-sm transition-shadow duration-200 hover:shadow-md"
                               >
-                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-200 text-base font-bold text-blue-800">
-                                  {row.day}
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-base font-bold text-gray-900">
-                                    {row.focus || "—"}
-                                  </p>
+                                <div className="flex shrink-0 flex-col items-center gap-0.5">
+                                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-200 text-xs font-bold text-blue-800">
+                                    {row.day}
+                                  </span>
+                                  {plan?.days && row.hours != null && (
+                                    <span className="text-xs font-semibold text-blue-700">
+                                      {row.hours}h
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="text-base font-bold leading-snug text-gray-900">
+                                    <MD>{row.focus || "—"}</MD>
+                                  </div>
                                   {row.method && (
-                                    <p className="mt-0.5 text-sm text-gray-600">
-                                      {row.method}
-                                    </p>
+                                    <div className="text-sm leading-relaxed text-gray-600">
+                                      <MD>{row.method}</MD>
+                                    </div>
                                   )}
                                   {loadLabel && (
-                                    <span className={`mt-2 inline-block rounded-full px-2.5 py-0.5 text-sm font-medium ${loadBadgeClass}`}>
+                                    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${loadBadgeClass}`}>
                                       {loadLabel}
                                     </span>
                                   )}
                                 </div>
-                                {plan?.days && row.hours != null && (
-                                  <span className="shrink-0 rounded-full bg-blue-300 px-2.5 py-1 text-sm font-semibold text-blue-800">
-                                    {row.hours}h
-                                  </span>
-                                )}
                               </div>
                             );
                           }
@@ -1115,15 +1217,15 @@ export default function StudyPlannerPage() {
                     </div>
 
                     {/* Topics to Grasp */}
-                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
-                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-5 text-lg font-bold text-gray-900">
                         <span className="mr-2" aria-hidden>✅</span>
                         Topics to Grasp
                       </h3>
                       {topicsList.length > 0 ? (
-                        <ul className="space-y-2">
+                        <ul className="space-y-2.5">
                           {topicsList.map((topic: string, i: number) => (
-                            <li key={i} className="flex items-center gap-2">
+                            <li key={i} className="flex items-center gap-3">
                               <input
                                 type="checkbox"
                                 checked={planTopicsChecked[i] ?? false}
@@ -1135,12 +1237,12 @@ export default function StudyPlannerPage() {
                                 }
                                 className="h-5 w-5 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
                               />
-                              <span className="text-base text-gray-900">{topic}</span>
+                              <div className="text-base text-gray-900 min-w-0 flex-1"><MD>{topic}</MD></div>
                             </li>
                           ))}
                         </ul>
                       ) : (
-                        <p className="text-base text-gray-600">
+                        <p className="text-base leading-relaxed text-gray-600">
                           Generate a plan to see topics here, or complete the diagnostic for weakness-based list.
                         </p>
                       )}
@@ -1148,17 +1250,17 @@ export default function StudyPlannerPage() {
                   </div>
 
                   {/* RIGHT column — divider above on mobile when stacked */}
-                  <div className="space-y-5 border-t-2 border-blue-200/60 pt-6 lg:border-t-0 lg:pt-0">
+                  <div className="space-y-6 border-t-2 border-blue-200/60 pt-6 lg:border-t-0 lg:pt-0">
                     {/* To-do List */}
-                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
-                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-5 text-lg font-bold text-gray-900">
                         <span className="mr-2" aria-hidden>✅</span>
                         To-do List
                       </h3>
                       {derivedTodos.length > 0 ? (
-                        <ul className="space-y-2">
+                        <ul className="space-y-2.5">
                           {derivedTodos.map((todo: string, i: number) => (
-                            <li key={i} className="flex items-start gap-2">
+                            <li key={i} className="flex items-start gap-3">
                               <input
                                 type="checkbox"
                                 checked={planTodoChecked[i] ?? false}
@@ -1170,22 +1272,22 @@ export default function StudyPlannerPage() {
                                 }
                                 className="mt-0.5 h-5 w-5 shrink-0 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
                               />
-                              <span className={`text-base ${planTodoChecked[i] ? "text-gray-400 line-through" : "text-gray-900"}`}>
-                                {todo}
-                              </span>
+                              <div className={`text-base leading-relaxed min-w-0 flex-1 ${planTodoChecked[i] ? "text-gray-400 line-through" : "text-gray-900"}`}>
+                                <MD>{todo}</MD>
+                              </div>
                             </li>
                           ))}
                         </ul>
                       ) : (
-                        <p className="text-base text-gray-600">
+                        <p className="text-base leading-relaxed text-gray-600">
                           Generate a plan to see daily to-dos here.
                         </p>
                       )}
                     </div>
 
                     {/* Notes */}
-                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
-                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-5 text-lg font-bold text-gray-900">
                         <span className="mr-2" aria-hidden>📝</span>
                         Notes
                       </h3>
@@ -1194,24 +1296,24 @@ export default function StudyPlannerPage() {
                         onChange={(e) => setPlanNotes(e.target.value)}
                         placeholder="Jot down reminders, resources, or goals..."
                         rows={4}
-                        className="w-full rounded-xl border-2 border-blue-200 bg-blue-50/50 px-3.5 py-2.5 text-base text-gray-900 placeholder-gray-400 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                        className="w-full rounded-xl border-2 border-blue-200 bg-blue-50/50 px-4 py-3 text-base leading-relaxed text-gray-900 placeholder-gray-400 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
 
                     {/* Hours of Study */}
-                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
-                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-5 text-lg font-bold text-gray-900">
                         <span className="mr-2" aria-hidden>⏳</span>
                         Hours of Study
                       </h3>
-                      <div className="flex flex-wrap gap-4">
-                        <div className="rounded-xl bg-blue-100/80 px-4 py-3">
-                          <span className="text-sm font-semibold text-gray-600">Daily cap</span>
-                          <p className="text-xl font-bold text-gray-900">{dailyHours}h</p>
+                      <div className="flex flex-wrap gap-5">
+                        <div className="rounded-xl bg-blue-100/80 px-5 py-3.5">
+                          <span className="block text-sm font-semibold text-gray-600">Daily cap</span>
+                          <p className="mt-1 text-xl font-bold text-gray-900">{dailyHours}h</p>
                         </div>
-                        <div className="rounded-xl bg-blue-200/80 px-4 py-3">
-                          <span className="text-sm font-semibold text-gray-600">Plan total</span>
-                          <p className="text-xl font-bold text-gray-900">{totalPlanHours}h</p>
+                        <div className="rounded-xl bg-blue-200/80 px-5 py-3.5">
+                          <span className="block text-sm font-semibold text-gray-600">Plan total</span>
+                          <p className="mt-1 text-xl font-bold text-gray-900">{totalPlanHours}h</p>
                         </div>
                       </div>
                     </div>
@@ -1230,24 +1332,24 @@ export default function StudyPlannerPage() {
                   const needsToggle =
                     (plan.strategy_summary?.length ?? 0) + (plan.rationale?.length ?? 0) > 280;
                   return (
-                    <div className="mt-6 border-t-2 border-blue-200/60 pt-6">
-                      <div className="rounded-xl border-2 border-blue-200/80 bg-white p-4 shadow-sm">
+                    <div className="mt-8 border-t-2 border-blue-200/60 pt-6">
+                      <div className="rounded-xl border-2 border-blue-200/80 bg-white p-5 shadow-sm">
                         <h3 className="text-base font-bold text-gray-900">
                           Why this plan?
                         </h3>
                         <div
-                          className={`mt-2 text-base text-gray-900 ${!planWhyExpanded ? "line-clamp-6" : ""}`}
+                          className={`mt-3 text-base leading-relaxed text-gray-900 ${!planWhyExpanded ? "line-clamp-6" : ""}`}
                         >
                           {plan.strategy_summary && (
                             <div className={rationaleBullets.length > 0 ? "mb-2" : ""}>
                               {strategyBullets.length > 1 ? (
                                 <ul className="list-inside list-disc space-y-0.5">
                                   {strategyBullets.map((s, i) => (
-                                    <li key={i}>{s}</li>
+                                    <li key={i}><MD>{s}</MD></li>
                                   ))}
                                 </ul>
                               ) : (
-                                <p>{plan.strategy_summary}</p>
+                                <MD>{plan.strategy_summary}</MD>
                               )}
                             </div>
                           )}
@@ -1256,11 +1358,11 @@ export default function StudyPlannerPage() {
                               {rationaleBullets.length > 1 ? (
                                 <ul className="list-inside list-disc space-y-0.5">
                                   {rationaleBullets.map((s, i) => (
-                                    <li key={i}>{s}</li>
+                                    <li key={i}><MD>{s}</MD></li>
                                   ))}
                                 </ul>
                               ) : (
-                                <p>{plan.rationale}</p>
+                                <MD>{plan.rationale}</MD>
                               )}
                             </div>
                           )}
@@ -1279,13 +1381,34 @@ export default function StudyPlannerPage() {
                   );
                 })()}
 
-                <div className="mt-6 border-t-2 border-blue-200/60 pt-6">
+                <div className="mt-8 border-t-2 border-blue-200/60 pt-6">
                   <button
                     type="button"
-                    disabled
-                    className="w-full cursor-not-allowed rounded-xl border-2 border-blue-200 bg-blue-100/50 py-3 text-base font-medium text-gray-500 focus:outline-none"
+                    onClick={async () => {
+                      const planDays = plan?.daysFull ?? plan?.days ?? [];
+                      if (planDays.length === 0) return;
+                      try {
+                        const res = await fetch("/api/export-ics", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ planDays }),
+                        });
+                        if (!res.ok) throw new Error("Export failed");
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "neuroplan.ics";
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      } catch (e) {
+                        console.error("ICS export failed:", e);
+                      }
+                    }}
+                    disabled={!plan || ((plan.days?.length ?? 0) === 0 && (plan.daysFull?.length ?? 0) === 0)}
+                    className="w-full rounded-xl border-2 border-blue-200 bg-blue-100/50 py-3.5 text-base font-medium text-blue-800 transition hover:bg-blue-200/60 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-blue-100/50 disabled:text-gray-500"
                   >
-                    Coming next: Calendar export (.ics)
+                    Download .ics
                   </button>
                 </div>
               </div>
