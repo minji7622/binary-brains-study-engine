@@ -11,19 +11,19 @@ const BodySchema = z.object({
 });
 
 const OutputSchema = z.object({
-  questions: z
-    .array(
-      z.object({
-        id: z.string(),
-        type: z.enum(["mcq", "short"]),
-        question: z.string(),
-        choices: z.array(z.string()).optional(),
-        answer_key: z.string().optional(),
-        concept_tag: z.string().optional(),
-      })
-    )
-    .length(7),
-});
+    questions: z
+      .array(
+        z.object({
+          id: z.string(),
+          type: z.enum(["mcq", "short"]),
+          question_md: z.string(),
+          choices_md: z.array(z.string()).optional(),
+          answer_key: z.string().nullable().optional(),
+          concept_tag: z.string().nullable().optional(),
+        })
+      )
+      .length(7),
+  });
 
 function extractJson(text: string) {
     // Remove ```json ... ``` or ``` ... ```
@@ -40,30 +40,35 @@ export async function POST(req: Request) {
     const body = BodySchema.parse(json);
 
     const prompt = `
-You are an expert tutor creating a diagnostic mini-test.
-Return ONLY raw JSON. Do NOT include markdown, backticks, or any commentary.
-Return ONLY valid JSON matching this schema:
+Return ONLY raw JSON (no markdown fences, no commentary).
+All math MUST be wrapped in $...$ (inline) or $$...$$ (block).
+Use these exact keys: id, type, question_md, choices_md (if mcq), answer_key (optional), concept_tag (optional).
+
+JSON schema:
 {
   "questions": [
     {
       "id": "q1",
       "type": "mcq" | "short",
-      "question": "...",
-      "choices": ["A", "B", "C", "D"],   // only if type is mcq
-      "answer_key": "..."               // optional
-      "concept_tag": "..."              // short tag like "chain_rule" or "stoichiometry"
+      "question_md": "string (may include $math$)",
+      "choices_md": ["A) ...", "B) ...", "C) ...", "D) ..."], // only if mcq
+      "answer_key": "A" | "B" | "C" | "D", // only if mcq, optional otherwise
+      "concept_tag": "short_tag"
     }
   ]
 }
 
-Rules:
-- Generate exactly 7 questions for subject: ${body.subject}
-- Difficulty: ${body.difficulty}
-- Mix: 4 MCQ + 3 short-answer
-- Questions should diagnose common misconceptions (not trivial recall)
-- Keep each question concise.
-`;
+Generate exactly 7 questions for:
+- subject: ${body.subject}
+- difficulty: ${body.difficulty}
 
+Mix: 4 MCQ + 3 short-answer.
+Questions should diagnose misconceptions.
+
+Important:
+- For MCQ, choices_md must be exactly 4 strings starting with "A)","B)","C)","D)".
+- Keep questions concise.
+`;
     const result = await generateText({
       model: minimax("MiniMax-Text-01"),
       prompt,

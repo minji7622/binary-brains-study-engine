@@ -1,5 +1,7 @@
 "use client";
-
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { useState } from "react";
 
 type Difficulty = "Easy" | "Medium" | "Hard";
@@ -18,9 +20,18 @@ type ProjectDeadline = {
   dueDate: string;
 };
 
+// Updated to match API: question_md / choices_md
+type GeneratedQuestion = {
+  id: string;
+  type: "mcq" | "short";
+  question_md: string;
+  choices_md?: string[];
+  answer_key?: string;
+  concept_tag?: string;
+};
+
 type DiagnosticQuestion = {
   answer: string;
-  skip: boolean;
   noIdea: boolean;
 };
 
@@ -36,6 +47,16 @@ function generateId() {
   return Math.random().toString(36).slice(2, 11);
 }
 
+function MD({ children }: { children: string }) {
+  return (
+    <div className="prose prose-sm max-w-none prose-stone">
+      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 export default function StudyPlannerPage() {
   const [step, setStep] = useState<StepIndex>(0);
 
@@ -45,13 +66,27 @@ export default function StudyPlannerPage() {
   ]);
   const [dailyHours, setDailyHours] = useState<number>(2);
   const [mode, setMode] = useState<Mode>("autopilot");
-  const [projectDeadlines, setProjectDeadlines] = useState<ProjectDeadline[]>([]);
+  const [projectDeadlines, setProjectDeadlines] = useState<ProjectDeadline[]>(
+    []
+  );
 
   // Diagnostic
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
-  const [diagnosticQuestions, setDiagnosticQuestions] = useState<
-    DiagnosticQuestion[]
-  >(Array.from({ length: 7 }, () => ({ answer: "", skip: false, noIdea: false })));
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(
+    null
+  );
+
+  // generated questions from API
+  const [generatedQuestions, setGeneratedQuestions] = useState<
+    GeneratedQuestion[] | null
+  >(null);
+
+  // User responses aligned to question index
+  const [diagnosticQuestions, setDiagnosticQuestions] = useState<DiagnosticQuestion[]>(
+    Array.from({ length: 7 }, () => ({ answer: "", noIdea: false }))
+  );
+
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
 
   const currentSubject = subjects.find((s) => s.id === selectedSubjectId);
   const selectedSubjectDisplay = currentSubject?.name || "Select a subject";
@@ -96,7 +131,10 @@ export default function StudyPlannerPage() {
     setProjectDeadlines((prev) => prev.filter((d) => d.id !== id));
   };
 
-  const setDiagnosticQuestion = (index: number, patch: Partial<DiagnosticQuestion>) => {
+  const setDiagnosticQuestion = (
+    index: number,
+    patch: Partial<DiagnosticQuestion>
+  ) => {
     setDiagnosticQuestions((prev) =>
       prev.map((q, i) => (i === index ? { ...q, ...patch } : q))
     );
@@ -108,6 +146,43 @@ export default function StudyPlannerPage() {
 
   const goBack = () => {
     if (step > 0) setStep((step - 1) as StepIndex);
+  };
+
+  // call API to generate diagnostic questions
+  const generateDiagnostic = async () => {
+    if (!currentSubject) return;
+
+    setIsGenerating(true);
+    setGenError(null);
+
+    try {
+      const res = await fetch("/api/generate-diagnostic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: currentSubject.name || "Untitled Subject",
+          difficulty: currentSubject.difficulty,
+          examDate: currentSubject.examDate,
+          mode: mode === "autopilot" ? "Autopilot" : "Coach",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.error || "Failed to generate.");
+      }
+
+      setGeneratedQuestions(data.questions);
+
+      // reset answers array to match 7 questions
+      setDiagnosticQuestions(
+        Array.from({ length: 7 }, () => ({ answer: "", noIdea: false }))
+      );
+    } catch (e: any) {
+      setGenError(e?.message ?? "Failed to generate diagnostic.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -340,9 +415,12 @@ export default function StudyPlannerPage() {
                 <label className={LABEL}>Select subject</label>
                 <select
                   value={selectedSubjectId ?? ""}
-                  onChange={(e) =>
-                    setSelectedSubjectId(e.target.value || null)
-                  }
+                  onChange={(e) => {
+                    const next = e.target.value || null;
+                    setSelectedSubjectId(next);
+                    setGeneratedQuestions(null);
+                    setGenError(null);
+                  }}
                   className={`mt-1.5 w-full ${INPUT}`}
                 >
                   <option value="">— Select a subject —</option>
@@ -356,55 +434,154 @@ export default function StudyPlannerPage() {
 
               {selectedSubjectId && (
                 <div className="space-y-4">
-                  <p className="text-sm text-stone-600">
-                    Answer or skip each question for{" "}
-                    <strong>{selectedSubjectDisplay}</strong>.
-                  </p>
-                  {diagnosticQuestions.map((q, i) => (
-                    <div
-                      key={i}
-                      className="rounded-lg border border-stone-200 bg-stone-50/50 p-3 space-y-2"
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm text-stone-600">
+                      Generate and answer questions for{" "}
+                      <strong>{selectedSubjectDisplay}</strong>.
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={generateDiagnostic}
+                      disabled={isGenerating || !currentSubject?.name}
+                      className="rounded-lg bg-stone-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 disabled:pointer-events-none"
                     >
-                      <label className="text-sm font-medium text-stone-700">
-                        Question {i + 1}
-                      </label>
-                      <input
-                        type="text"
-                        value={q.answer}
-                        onChange={(e) =>
-                          setDiagnosticQuestion(i, { answer: e.target.value })
-                        }
-                        placeholder="Your answer..."
-                        className={`w-full ${INPUT}`}
-                      />
-                      <div className="flex flex-wrap gap-4">
-                        <label className="flex items-center gap-2 text-sm text-stone-600">
-                          <input
-                            type="checkbox"
-                            checked={q.skip}
-                            onChange={(e) =>
-                              setDiagnosticQuestion(i, { skip: e.target.checked })
-                            }
-                            className="rounded border-stone-300"
-                          />
-                          Skip
-                        </label>
-                        <label className="flex items-center gap-2 text-sm text-stone-600">
-                          <input
-                            type="checkbox"
-                            checked={q.noIdea}
-                            onChange={(e) =>
-                              setDiagnosticQuestion(i, {
-                                noIdea: e.target.checked,
-                              })
-                            }
-                            className="rounded border-stone-300"
-                          />
-                          No idea
-                        </label>
-                      </div>
+                      Generate Diagnostic
+                    </button>
+                  </div>
+
+                  {!currentSubject?.name && (
+                    <p className="text-xs text-stone-500">
+                      Please name the subject in Setup first.
+                    </p>
+                  )}
+
+                  {genError && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {genError}
                     </div>
-                  ))}
+                  )}
+
+                  {isGenerating && (
+                    <div className="space-y-3">
+                      <p className="text-sm text-stone-500">
+                        Generating adaptive questions (usually 5–10s)…
+                      </p>
+                      {Array.from({ length: 7 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="rounded-lg border border-stone-200 bg-stone-100/80 p-4 space-y-3 animate-pulse"
+                        >
+                          <div className="h-4 w-1/3 rounded bg-stone-300" />
+                          <div className="space-y-2">
+                            <div className="h-3 w-full rounded bg-stone-200" />
+                            <div className="h-3 w-4/5 rounded bg-stone-200" />
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="h-9 flex-1 rounded-lg bg-stone-200" />
+                            <div className="h-9 flex-1 rounded-lg bg-stone-200" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {generatedQuestions && !isGenerating && (
+                    <div className="space-y-3">
+                      {generatedQuestions.map((gq, i) => (
+                        <div
+                          key={gq.id}
+                          className="rounded-lg border border-stone-200 bg-stone-50/50 p-3 space-y-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="text-sm font-medium text-stone-700">
+                                Question {i + 1}
+                              </div>
+                              <MD>{gq.question_md}</MD>
+                            </div>
+                            <span className="shrink-0 rounded-full bg-stone-200 px-2 py-1 text-xs text-stone-700">
+                              {gq.type.toUpperCase()}
+                            </span>
+                          </div>
+
+                          {/* MCQ */}
+                          {gq.type === "mcq" && gq.choices_md ? (
+                            <div className="space-y-2">
+                              {gq.choices_md.map((choice, idx) => {
+                                const letter = choice.trim().slice(0, 1);
+                                const noIdea = diagnosticQuestions[i]?.noIdea ?? false;
+                                return (
+                                  <label
+                                    key={idx}
+                                    className={`flex items-start gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2 hover:bg-stone-50 ${noIdea ? "pointer-events-none opacity-60" : ""}`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`mcq-${gq.id}`}
+                                      value={letter}
+                                      checked={diagnosticQuestions[i]?.answer === letter}
+                                      onChange={(e) =>
+                                        setDiagnosticQuestion(i, { answer: e.target.value })
+                                      }
+                                      disabled={noIdea}
+                                      className="mt-1"
+                                    />
+                                    <div className="flex-1">
+                                      <MD>{choice}</MD>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            /* Short answer */
+                            <input
+                              type="text"
+                              value={diagnosticQuestions[i]?.answer ?? ""}
+                              onChange={(e) =>
+                                setDiagnosticQuestion(i, { answer: e.target.value })
+                              }
+                              placeholder="Your answer..."
+                              disabled={diagnosticQuestions[i]?.noIdea ?? false}
+                              className={`w-full ${INPUT} disabled:opacity-60 disabled:cursor-not-allowed`}
+                            />
+                          )}
+
+                          {/* No idea */}
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-2 text-sm text-stone-600">
+                              <input
+                                type="checkbox"
+                                checked={diagnosticQuestions[i]?.noIdea ?? false}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setDiagnosticQuestion(
+                                    i,
+                                    checked ? { noIdea: true, answer: "" } : { noIdea: false }
+                                  );
+                                }}
+                                className="rounded border-stone-300"
+                              />
+                              No idea
+                            </label>
+                            {(diagnosticQuestions[i]?.noIdea ?? false) && (
+                              <p className="text-xs text-stone-500 pl-6">
+                                Marked as &apos;No idea&apos; — we&apos;ll treat this as a gap to focus on.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!generatedQuestions && !isGenerating && (
+                    <div className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-500">
+                      Click <strong>Generate Diagnostic</strong> to create 7
+                      questions.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -441,15 +618,11 @@ export default function StudyPlannerPage() {
                 <div className="mt-3 flex flex-wrap gap-4">
                   <div className="rounded-lg bg-stone-100 px-3 py-2">
                     <span className="text-xs text-stone-500">Today</span>
-                    <p className="text-lg font-semibold text-stone-800">
-                      — %
-                    </p>
+                    <p className="text-lg font-semibold text-stone-800">— %</p>
                   </div>
                   <div className="rounded-lg bg-stone-100 px-3 py-2">
                     <span className="text-xs text-stone-500">After 7 days</span>
-                    <p className="text-lg font-semibold text-stone-800">
-                      — %
-                    </p>
+                    <p className="text-lg font-semibold text-stone-800">— %</p>
                   </div>
                 </div>
               </div>
