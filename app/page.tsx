@@ -35,6 +35,23 @@ type DiagnosticQuestion = {
   noIdea: boolean;
 };
 
+type AnalysisWeakness = {
+  concept_tag: string;
+  severity: "high" | "medium" | "low";
+  description?: string;
+};
+
+type Analysis = {
+  mastery_percent: number;
+  weaknesses: AnalysisWeakness[];
+  predicted_score_today?: number;
+  predicted_score_after_7_days?: number;
+  recommended_mode: "Autopilot" | "Coach";
+  mode_reasoning: string;
+  strong_learner?: boolean;
+  careless_patterns?: string[];
+};
+
 const STEPS = ["Setup", "Diagnostic", "Insights", "Plan"] as const;
 type StepIndex = 0 | 1 | 2 | 3;
 
@@ -65,6 +82,7 @@ export default function StudyPlannerPage() {
     { id: generateId(), name: "", examDate: "", difficulty: "Medium" },
   ]);
   const [dailyHours, setDailyHours] = useState<number>(2);
+  // User-selected mode (Autopilot/Coach). Source of truth for plan/practice API calls.
   const [mode, setMode] = useState<Mode>("autopilot");
   const [projectDeadlines, setProjectDeadlines] = useState<ProjectDeadline[]>(
     []
@@ -87,6 +105,16 @@ export default function StudyPlannerPage() {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+
+  // Analysis (from /api/analyze-answers)
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  // AI recommendation for display/guidance only; never used for API calls (use `mode`).
+  const [aiRecommendedMode, setAiRecommendedMode] = useState<
+    "autopilot" | "coach" | null
+  >(null);
+  const [modeReasoning, setModeReasoning] = useState("");
 
   const currentSubject = subjects.find((s) => s.id === selectedSubjectId);
   const selectedSubjectDisplay = currentSubject?.name || "Select a subject";
@@ -173,6 +201,10 @@ export default function StudyPlannerPage() {
       }
 
       setGeneratedQuestions(data.questions);
+      setAnalysis(null);
+      setAiRecommendedMode(null);
+      setModeReasoning("");
+      setAnalyzeError(null);
 
       // reset answers array to match 7 questions
       setDiagnosticQuestions(
@@ -182,6 +214,45 @@ export default function StudyPlannerPage() {
       setGenError(e?.message ?? "Failed to generate diagnostic.");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const analyzeAnswers = async () => {
+    if (!currentSubject || !generatedQuestions) return;
+
+    setIsAnalyzing(true);
+    setAnalyzeError(null);
+
+    try {
+      const res = await fetch("/api/analyze-answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: currentSubject.name,
+          difficulty: currentSubject.difficulty,
+          mode: mode === "autopilot" ? "Autopilot" : "Coach",
+          questions: generatedQuestions,
+          answers: diagnosticQuestions,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || data?.error || "Failed to analyze answers.");
+      }
+
+      setAnalysis(data);
+      setAiRecommendedMode(
+        data.recommended_mode === "Autopilot" ? "autopilot" : "coach"
+      );
+      setModeReasoning(data.mode_reasoning ?? "");
+      setStep(2);
+    } catch (e: unknown) {
+      setAnalyzeError(
+        e instanceof Error ? e.message : "Failed to analyze answers."
+      );
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -420,6 +491,10 @@ export default function StudyPlannerPage() {
                     setSelectedSubjectId(next);
                     setGeneratedQuestions(null);
                     setGenError(null);
+                    setAnalysis(null);
+                    setAiRecommendedMode(null);
+                    setModeReasoning("");
+                    setAnalyzeError(null);
                   }}
                   className={`mt-1.5 w-full ${INPUT}`}
                 >
@@ -576,6 +651,24 @@ export default function StudyPlannerPage() {
                     </div>
                   )}
 
+                  {generatedQuestions && !isGenerating && (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={analyzeAnswers}
+                        disabled={isAnalyzing}
+                        className="w-full rounded-lg bg-stone-800 py-2.5 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        {isAnalyzing ? "Analyzing…" : "Analyze Answers"}
+                      </button>
+                      {analyzeError && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                          {analyzeError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {!generatedQuestions && !isGenerating && (
                     <div className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-500">
                       Click <strong>Generate Diagnostic</strong> to create 7
@@ -592,22 +685,107 @@ export default function StudyPlannerPage() {
             <div className="space-y-6">
               <h2 className="text-lg font-medium text-stone-800">Insights</h2>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className={CARD}>
-                  <h3 className="text-sm font-medium text-stone-600">
-                    Weaknesses
+              {/* AI Recommendation: Learning Mode */}
+              {analysis && (
+                <div className={`${CARD} border-stone-300 bg-stone-50/50`}>
+                  <h3 className="text-base font-semibold text-stone-800">
+                    AI Recommendation: Learning Mode
                   </h3>
-                  <p className="mt-2 text-sm text-stone-500">
-                    Placeholder: topics to focus on will appear here.
+                  <p className="mt-1 text-xs text-stone-500">
+                    Guidance only. Your selected mode (Setup or below) is used for your plan.
                   </p>
+                  <p className="mt-1 text-sm font-medium text-stone-700">
+                    {analysis.recommended_mode}
+                  </p>
+                  <p className="mt-2 text-sm text-stone-600">
+                    {modeReasoning || analysis.mode_reasoning}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMode(aiRecommendedMode ?? "autopilot")
+                      }
+                      className="rounded-lg bg-stone-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700"
+                    >
+                      Accept Recommendation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {}}
+                      className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50"
+                    >
+                      Keep My Current Mode
+                    </button>
+                  </div>
+                  {aiRecommendedMode !== null && mode !== aiRecommendedMode && (
+                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-900">
+                      {mode === "coach" && aiRecommendedMode === "autopilot"
+                        ? "Coach mode selected. Note: based on your diagnostic profile, progress may be slower compared to Autopilot."
+                        : "Autopilot mode selected. Note: based on your profile, Coach mode may be sufficient and more flexible."}
+                    </div>
+                  )}
                 </div>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className={CARD}>
                   <h3 className="text-sm font-medium text-stone-600">
                     Mastery %
                   </h3>
-                  <p className="mt-2 text-sm text-stone-500">
-                    Placeholder: overall mastery percentage.
-                  </p>
+                  {analysis ? (
+                    <p className="mt-2 text-2xl font-semibold text-stone-800">
+                      {analysis.mastery_percent}%
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm text-stone-500">
+                      Complete the diagnostic and analyze answers to see
+                      mastery.
+                    </p>
+                  )}
+                </div>
+                <div className={CARD}>
+                  <h3 className="text-sm font-medium text-stone-600">
+                    Weaknesses
+                  </h3>
+                  {analysis && analysis.weaknesses.length > 0 ? (
+                    <ul className="mt-2 space-y-2">
+                      {analysis.weaknesses.map((w, i) => (
+                        <li
+                          key={i}
+                          className="flex flex-wrap items-start gap-2 text-sm"
+                        >
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              w.severity === "high"
+                                ? "bg-red-100 text-red-800"
+                                : w.severity === "medium"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-stone-200 text-stone-700"
+                            }`}
+                          >
+                            {w.severity}
+                          </span>
+                          <span className="font-medium text-stone-700">
+                            {w.concept_tag}
+                          </span>
+                          {w.description && (
+                            <span className="text-stone-600">
+                              — {w.description}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : analysis ? (
+                    <p className="mt-2 text-sm text-stone-500">
+                      No weaknesses identified.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm text-stone-500">
+                      Topics to focus on will appear here after analysis.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -618,24 +796,62 @@ export default function StudyPlannerPage() {
                 <div className="mt-3 flex flex-wrap gap-4">
                   <div className="rounded-lg bg-stone-100 px-3 py-2">
                     <span className="text-xs text-stone-500">Today</span>
-                    <p className="text-lg font-semibold text-stone-800">— %</p>
+                    <p className="text-lg font-semibold text-stone-800">
+                      {analysis?.predicted_score_today != null
+                        ? `${analysis.predicted_score_today}%`
+                        : "— %"}
+                    </p>
                   </div>
                   <div className="rounded-lg bg-stone-100 px-3 py-2">
                     <span className="text-xs text-stone-500">After 7 days</span>
-                    <p className="text-lg font-semibold text-stone-800">— %</p>
+                    <p className="text-lg font-semibold text-stone-800">
+                      {analysis?.predicted_score_after_7_days != null
+                        ? `${analysis.predicted_score_after_7_days}%`
+                        : "— %"}
+                    </p>
                   </div>
                 </div>
               </div>
 
-              <div className={CARD}>
-                <h3 className="text-sm font-medium text-stone-600">
-                  Strong Learner Tools
-                </h3>
-                <p className="mt-2 text-sm text-stone-500">
-                  Placeholder: recommended tools and techniques will appear
-                  here.
-                </p>
-              </div>
+              {analysis?.strong_learner != null && (
+                <div className={CARD}>
+                  <h3 className="text-sm font-medium text-stone-600">
+                    Strong Learner
+                  </h3>
+                  <p className="mt-2 text-sm text-stone-700">
+                    {analysis.strong_learner
+                      ? "Your profile suggests strong learning habits; Coach mode can help you stay in control while still getting guidance."
+                      : "Focus on core gaps first; Autopilot can help structure your practice until foundations are solid."}
+                  </p>
+                </div>
+              )}
+
+              {analysis?.careless_patterns != null &&
+                analysis.careless_patterns.length > 0 && (
+                  <div className={CARD}>
+                    <h3 className="text-sm font-medium text-stone-600">
+                      Careless patterns
+                    </h3>
+                    <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-stone-600">
+                      {analysis.careless_patterns.map((p, i) => (
+                        <li key={i}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+              {(!analysis || analysis.strong_learner == null) && (
+                <div className={CARD}>
+                  <h3 className="text-sm font-medium text-stone-600">
+                    Strong Learner Tools
+                  </h3>
+                  <p className="mt-2 text-sm text-stone-500">
+                    {analysis
+                      ? "Recommended tools and techniques will appear here when available."
+                      : "Complete the diagnostic and analyze answers to see recommendations."}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
