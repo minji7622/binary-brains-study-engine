@@ -2,6 +2,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import Image from "next/image";
 import { useState } from "react";
 
 type Difficulty = "Easy" | "Medium" | "Hard";
@@ -59,9 +60,9 @@ const STEPS = ["Setup", "Diagnostic", "Insights", "Plan"] as const;
 type StepIndex = 0 | 1 | 2 | 3;
 
 const INPUT =
-  "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 outline-none transition focus:border-stone-500 focus:ring-1 focus:ring-stone-400";
-const LABEL = "block text-sm font-medium text-stone-700";
-const CARD = "rounded-xl border border-stone-200 bg-white p-4 shadow-sm";
+  "rounded-xl border-2 border-blue-200 bg-white px-3.5 py-2.5 text-base text-gray-900 placeholder-gray-400 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200";
+const LABEL = "block text-base font-semibold text-gray-900";
+const CARD = "rounded-2xl border-2 border-blue-200/80 bg-white p-5 shadow-lg shadow-blue-100/50";
 
 function generateId() {
   return Math.random().toString(36).slice(2, 11);
@@ -69,7 +70,7 @@ function generateId() {
 
 function MD({ children }: { children: string }) {
   return (
-    <div className="prose prose-sm max-w-none prose-stone">
+    <div className="prose prose-base max-w-none prose-headings:text-gray-900 prose-p:text-gray-900 prose-strong:text-gray-900">
       <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
         {children}
       </ReactMarkdown>
@@ -117,6 +118,14 @@ export default function StudyPlannerPage() {
     "autopilot" | "coach" | null
   >(null);
   const [modeReasoning, setModeReasoning] = useState("");
+
+  const [plan, setPlan] = useState<any | null>(null);
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planNotes, setPlanNotes] = useState("");
+  const [planTodoChecked, setPlanTodoChecked] = useState<Record<number, boolean>>({});
+  const [planTopicsChecked, setPlanTopicsChecked] = useState<Record<number, boolean>>({});
+  const [planWhyExpanded, setPlanWhyExpanded] = useState(false);
 
   const currentSubject = subjects.find((s) => s.id === selectedSubjectId);
   const selectedSubjectDisplay = currentSubject?.name || "Select a subject";
@@ -228,6 +237,38 @@ export default function StudyPlannerPage() {
     }
   };
 
+  const generatePlan = async () => {
+    if (!currentSubject || !analysis) return;
+    setIsGeneratingPlan(true);
+    setPlanError(null);
+    try {
+      const res = await fetch("/api/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: currentSubject.name,
+          mastery_percent: analysis.mastery_percent,
+          weaknesses: analysis.weaknesses,
+          dailyHours,
+          examDate: currentSubject.examDate,
+          mode,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail ?? data?.error ?? "Failed to generate plan.");
+      }
+      setPlan(data);
+      setStep(3);
+    } catch (e: unknown) {
+      setPlanError(
+        e instanceof Error ? e.message : "Failed to generate study plan."
+      );
+    } finally {
+      setIsGeneratingPlan(false);
+    }
+  };
+
   const analyzeAnswers = async () => {
     if (!currentSubject || !generatedQuestions) return;
 
@@ -270,20 +311,32 @@ export default function StudyPlannerPage() {
   };
 
   return (
-    <main className="min-h-screen bg-stone-50 text-stone-900 flex flex-col items-center p-6 pb-12">
+    <main className="min-h-screen flex flex-col items-center bg-blue-50 text-gray-900 p-6 pb-12">
       <div className="w-full max-w-2xl space-y-6">
-        <header className="text-center">
-          <h1 className="text-2xl font-semibold tracking-tight text-stone-800">
-            AI Study Planner Engine
-          </h1>
-          <p className="mt-1.5 text-sm text-stone-500">
-            Setup → Diagnostic → Insights → Plan
-          </p>
+        {/* Brand row: mascot + NeuroPlan — transparent PNG on tinted background */}
+        <header className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center sm:gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-blue-100 shadow-md ring-2 ring-blue-200/80">
+            <Image
+              src="/branding/neuroplan-main.png"
+              alt="NeuroPlan mascot"
+              width={48}
+              height={48}
+              className="object-contain object-center"
+            />
+          </div>
+          <div className="text-center sm:text-left">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+              NeuroPlan
+            </h1>
+            <p className="mt-1 text-base text-gray-600">
+              Adaptive diagnostics → personalized plans → calendar-ready.
+            </p>
+          </div>
         </header>
 
         {/* Step progress indicator */}
         <nav
-          className="flex items-center justify-between rounded-xl border border-stone-200 bg-white px-2 py-3 shadow-sm"
+          className="flex items-center justify-between rounded-2xl border-2 border-blue-200/80 bg-white px-3 py-3.5 shadow-md shadow-blue-100/40"
           aria-label="Progress"
         >
           {STEPS.map((name, i) => (
@@ -291,18 +344,18 @@ export default function StudyPlannerPage() {
               <button
                 type="button"
                 onClick={() => setStep(i as StepIndex)}
-                className={`rounded-lg px-2 py-1.5 text-sm font-medium transition ${
+                className={`rounded-xl px-3 py-2 text-base font-semibold transition ${
                   step === i
-                    ? "bg-stone-800 text-white"
-                    : "text-stone-500 hover:bg-stone-100 hover:text-stone-700"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-blue-600 hover:bg-blue-100 hover:text-blue-800"
                 }`}
               >
                 {name}
               </button>
               {i < STEPS.length - 1 && (
                 <span
-                  className={`mx-1 h-px flex-1 max-w-8 ${
-                    step > i ? "bg-stone-400" : "bg-stone-200"
+                  className={`mx-1.5 h-px flex-1 max-w-10 ${
+                    step > i ? "bg-blue-400" : "bg-blue-200"
                   }`}
                   aria-hidden
                 />
@@ -314,17 +367,18 @@ export default function StudyPlannerPage() {
         <div className={CARD}>
           {/* Step 0: Setup */}
           {step === 0 && (
-            <div className="space-y-6">
-              <h2 className="text-lg font-medium text-stone-800">Setup</h2>
+            <div className="flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
+              <div className="min-w-0 flex-1 space-y-6 order-2 md:order-1">
+                <h2 className="text-xl font-bold text-gray-900">Setup</h2>
 
-              {/* Subjects */}
-              <div>
+                {/* Subjects */}
+                <div>
                 <div className="flex items-center justify-between">
                   <label className={LABEL}>Subjects</label>
                   <button
                     type="button"
                     onClick={addSubject}
-                    className="text-sm font-medium text-stone-600 hover:text-stone-800"
+                    className="text-base font-semibold text-blue-600 hover:text-blue-700"
                   >
                     + Add subject
                   </button>
@@ -333,7 +387,7 @@ export default function StudyPlannerPage() {
                   {subjects.map((s) => (
                     <div
                       key={s.id}
-                      className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-200 bg-stone-50/50 p-3"
+                      className="flex flex-wrap items-end gap-2 rounded-xl border-2 border-blue-200/70 bg-blue-50/50 p-3.5"
                     >
                       <input
                         type="text"
@@ -371,7 +425,7 @@ export default function StudyPlannerPage() {
                         type="button"
                         onClick={() => removeSubject(s.id)}
                         disabled={subjects.length <= 1}
-                        className="rounded-lg px-2 py-1.5 text-sm text-stone-500 hover:bg-stone-200 hover:text-stone-700 disabled:opacity-50 disabled:hover:bg-transparent"
+                        className="rounded-lg px-3 py-2 text-base font-medium text-blue-600 hover:bg-blue-100 hover:text-blue-800 disabled:opacity-50 disabled:hover:bg-transparent"
                       >
                         Remove
                       </button>
@@ -404,14 +458,14 @@ export default function StudyPlannerPage() {
               {/* Mode */}
               <div>
                 <span className={LABEL}>Mode</span>
-                <div className="mt-2 flex rounded-lg border border-stone-300 bg-stone-100/50 p-1">
+                <div className="mt-2 flex rounded-xl border-2 border-blue-200 bg-blue-50/50 p-1.5">
                   <button
                     type="button"
                     onClick={() => setMode("autopilot")}
-                    className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${
+                    className={`flex-1 rounded-lg px-4 py-2.5 text-base font-semibold transition ${
                       mode === "autopilot"
-                        ? "bg-white text-stone-900 shadow-sm"
-                        : "text-stone-600 hover:text-stone-900"
+                        ? "bg-blue-600 text-white shadow-sm"
+                        : "text-blue-700 hover:bg-blue-100"
                     }`}
                   >
                     Autopilot
@@ -419,16 +473,16 @@ export default function StudyPlannerPage() {
                   <button
                     type="button"
                     onClick={() => setMode("coach")}
-                    className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${
+                    className={`flex-1 rounded-lg px-4 py-2.5 text-base font-semibold transition ${
                       mode === "coach"
-                        ? "bg-white text-stone-900 shadow-sm"
-                        : "text-stone-600 hover:text-stone-900"
+                        ? "bg-blue-600 text-white shadow-sm"
+                        : "text-blue-700 hover:bg-blue-100"
                     }`}
                   >
                     Coach
                   </button>
                 </div>
-                <p className="mt-1.5 text-xs text-stone-500">
+                <p className="mt-2 text-sm text-gray-600">
                   {mode === "autopilot"
                     ? "AI manages everything"
                     : "AI acts as assistant"}
@@ -442,13 +496,13 @@ export default function StudyPlannerPage() {
                   <button
                     type="button"
                     onClick={addDeadline}
-                    className="text-sm font-medium text-stone-600 hover:text-stone-800"
+                    className="text-base font-semibold text-blue-600 hover:text-blue-700"
                   >
                     + Add deadline
                   </button>
                 </div>
                 {projectDeadlines.length === 0 ? (
-                  <p className="mt-1.5 text-sm text-stone-500">
+                  <p className="mt-2 text-base text-blue-600">
                     No deadlines added.
                   </p>
                 ) : (
@@ -478,7 +532,7 @@ export default function StudyPlannerPage() {
                         <button
                           type="button"
                           onClick={() => removeDeadline(d.id)}
-                          className="rounded-lg px-2 py-1.5 text-sm text-stone-500 hover:bg-stone-200 hover:text-stone-700"
+                          className="rounded-lg px-3 py-2 text-base font-medium text-blue-600 hover:bg-blue-100 hover:text-blue-800"
                         >
                           Remove
                         </button>
@@ -487,13 +541,27 @@ export default function StudyPlannerPage() {
                   </div>
                 )}
               </div>
+              </div>
+
+              {/* Mascot hero — transparent PNG on soft blue background */}
+              <div className="order-1 flex justify-center md:order-2 md:w-[200px] md:shrink-0">
+                <div className="flex h-[180px] w-[180px] max-w-[220px] items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-blue-100 to-blue-200 shadow-lg ring-2 ring-blue-200/60 sm:h-[200px] sm:w-[200px]">
+                  <Image
+                    src="/branding/neuroplan-main.png"
+                    alt=""
+                    width={200}
+                    height={200}
+                    className="object-contain object-center"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
           {/* Step 1: Diagnostic */}
           {step === 1 && (
             <div className="space-y-6">
-              <h2 className="text-lg font-medium text-stone-800">Diagnostic</h2>
+              <h2 className="text-xl font-bold text-gray-900">Diagnostic</h2>
 
               <div>
                 <label className={LABEL}>Select subject</label>
@@ -523,17 +591,28 @@ export default function StudyPlannerPage() {
               {selectedSubjectId && (
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm text-stone-600">
-                      Generate and answer questions for{" "}
-                      <strong>{selectedSubjectDisplay}</strong>.
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-blue-100 shadow-sm ring-2 ring-blue-200/60">
+                        <Image
+                          src="/branding/neuroplan-chat.png"
+                          alt=""
+                          width={44}
+                          height={44}
+                          className="object-contain object-center"
+                        />
+                      </div>
+                      <p className="text-base text-gray-900">
+                        Generate and answer questions for{" "}
+                        <strong className="text-gray-900">{selectedSubjectDisplay}</strong>.
+                      </p>
+                    </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={generateDiagnostic}
                         disabled={isGenerating || !currentSubject?.name}
-                        className="rounded-lg bg-stone-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 disabled:pointer-events-none"
+                        className="rounded-xl bg-blue-600 px-5 py-2.5 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50 disabled:pointer-events-none"
                       >
                         Generate Diagnostic
                       </button>
@@ -541,7 +620,7 @@ export default function StudyPlannerPage() {
                         type="button"
                         onClick={generateDiagnostic}
                         disabled={isGenerating || !currentSubject?.name}
-                        className="text-sm font-medium text-stone-500 hover:text-stone-700 disabled:opacity-50 disabled:pointer-events-none"
+                        className="rounded-xl px-4 py-2.5 text-base font-semibold text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:pointer-events-none"
                       >
                         Regenerate
                       </button>
@@ -549,13 +628,13 @@ export default function StudyPlannerPage() {
                   </div>
 
                   {!currentSubject?.name && (
-                    <p className="text-xs text-stone-500">
+                    <p className="text-sm text-gray-600">
                       Please name the subject in Setup first.
                     </p>
                   )}
 
                   {genError && (
-                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    <div className="rounded-xl border-2 border-red-200 bg-red-50 p-4 text-base text-red-700">
                       {genError}
                     </div>
                   )}
@@ -571,16 +650,16 @@ export default function StudyPlannerPage() {
                         return (
                         <div
                           key={gq.id}
-                          className="rounded-lg border border-stone-200 bg-stone-50/50 p-3 space-y-3"
+                          className="rounded-xl border-2 border-blue-200 bg-blue-50/50 p-4 space-y-3"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="space-y-1">
-                              <div className="text-sm font-medium text-stone-700">
+                              <div className="text-base font-semibold text-gray-900">
                                 Question {i + 1}
                               </div>
                               <MD>{gq.question_md}</MD>
                             </div>
-                            <span className="shrink-0 rounded-full bg-stone-200 px-2 py-1 text-xs text-stone-700">
+                            <span className="shrink-0 rounded-full bg-blue-200 px-2.5 py-1 text-sm font-semibold text-blue-800">
                               {gq.type.toUpperCase()}
                             </span>
                           </div>
@@ -594,7 +673,7 @@ export default function StudyPlannerPage() {
                                 return (
                                   <label
                                     key={idx}
-                                    className={`flex items-start gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2 hover:bg-stone-50 ${ans.noIdea ? "pointer-events-none opacity-60" : ""}`}
+                                    className={`flex items-start gap-2 rounded-xl border-2 border-blue-200 bg-white px-3.5 py-2.5 hover:bg-blue-50 ${ans.noIdea ? "pointer-events-none opacity-60" : ""}`}
                                   >
                                     <input
                                       type="radio"
@@ -630,7 +709,7 @@ export default function StudyPlannerPage() {
 
                           {/* No idea */}
                           <div className="space-y-1">
-                            <label className="flex items-center gap-2 text-sm text-stone-600">
+                            <label className="flex items-center gap-2 text-base text-gray-900">
                               <input
                                 type="checkbox"
                                 checked={ans.noIdea}
@@ -641,12 +720,12 @@ export default function StudyPlannerPage() {
                                     answer: checked ? "" : ans.answer,
                                   });
                                 }}
-                                className="rounded border-stone-300"
+                                className="h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
                               />
                               No idea
                             </label>
                             {ans.noIdea && (
-                              <p className="text-xs text-stone-500 pl-6">
+                              <p className="text-sm text-gray-600 pl-6">
                                 Marked as &apos;No idea&apos; — we&apos;ll treat this as a gap to focus on.
                               </p>
                             )}
@@ -659,7 +738,7 @@ export default function StudyPlannerPage() {
 
                   {isGenerating && (generatedQuestions?.length ?? 0) < 7 && (
                     <div className="space-y-3">
-                      <p className="text-sm text-stone-500">
+                      <p className="text-base text-gray-600">
                         {generatedQuestions?.length
                           ? "Loading remaining questions…"
                           : "Generating adaptive questions (usually 5–10s)…"}
@@ -669,16 +748,16 @@ export default function StudyPlannerPage() {
                       }).map((_, i) => (
                         <div
                           key={`skeleton-${i}`}
-                          className="rounded-lg border border-stone-200 bg-stone-100/80 p-4 space-y-3 animate-pulse"
+                          className="rounded-xl border-2 border-blue-200 bg-blue-100/60 p-4 space-y-3 animate-pulse"
                         >
-                          <div className="h-4 w-1/3 rounded bg-stone-300" />
+                          <div className="h-4 w-1/3 rounded bg-blue-300" />
                           <div className="space-y-2">
-                            <div className="h-3 w-full rounded bg-stone-200" />
-                            <div className="h-3 w-4/5 rounded bg-stone-200" />
+                            <div className="h-3 w-full rounded bg-blue-200" />
+                            <div className="h-3 w-4/5 rounded bg-blue-200" />
                           </div>
                           <div className="flex gap-2">
-                            <div className="h-9 flex-1 rounded-lg bg-stone-200" />
-                            <div className="h-9 flex-1 rounded-lg bg-stone-200" />
+                            <div className="h-9 flex-1 rounded-lg bg-blue-200" />
+                            <div className="h-9 flex-1 rounded-lg bg-blue-200" />
                           </div>
                         </div>
                       ))}
@@ -691,12 +770,12 @@ export default function StudyPlannerPage() {
                         type="button"
                         onClick={analyzeAnswers}
                         disabled={isAnalyzing}
-                        className="w-full rounded-lg bg-stone-800 py-2.5 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 disabled:pointer-events-none"
+                        className="w-full rounded-xl bg-blue-600 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50 disabled:pointer-events-none"
                       >
                         {isAnalyzing ? "Analyzing…" : "Analyze Answers"}
                       </button>
                       {analyzeError && (
-                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                        <div className="rounded-xl border-2 border-red-200 bg-red-50 p-4 text-base text-red-700">
                           {analyzeError}
                         </div>
                       )}
@@ -704,7 +783,7 @@ export default function StudyPlannerPage() {
                   )}
 
                   {(!generatedQuestions || generatedQuestions.length === 0) && !isGenerating && (
-                    <div className="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-500">
+                    <div className="rounded-xl border-2 border-blue-200 bg-blue-50/50 p-4 text-base text-gray-900">
                       Click <strong>Generate Diagnostic</strong> to create 7
                       questions.
                     </div>
@@ -717,21 +796,32 @@ export default function StudyPlannerPage() {
           {/* Step 2: Insights */}
           {step === 2 && (
             <div className="space-y-6">
-              <h2 className="text-lg font-medium text-stone-800">Insights</h2>
+              <h2 className="flex flex-wrap items-center gap-2 text-xl font-bold text-gray-900">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-blue-100 shadow-sm ring-2 ring-blue-200/60">
+                  <Image
+                    src="/branding/neuroplan-glasses.png"
+                    alt=""
+                    width={40}
+                    height={40}
+                    className="object-contain object-center"
+                  />
+                </span>
+                Insights
+              </h2>
 
               {/* AI Recommendation: Learning Mode */}
               {analysis && (
-                <div className={`${CARD} border-stone-300 bg-stone-50/50`}>
-                  <h3 className="text-base font-semibold text-stone-800">
+                <div className={`${CARD} border-blue-200 bg-blue-50/40`}>
+                  <h3 className="text-lg font-bold text-gray-900">
                     AI Recommendation: Learning Mode
                   </h3>
-                  <p className="mt-1 text-xs text-stone-500">
+                  <p className="mt-1 text-sm text-gray-600">
                     Guidance only. Your selected mode (Setup or below) is used for your plan.
                   </p>
-                  <p className="mt-1 text-sm font-medium text-stone-700">
+                  <p className="mt-2 text-base font-semibold text-gray-900">
                     {analysis.recommended_mode}
                   </p>
-                  <p className="mt-2 text-sm text-stone-600">
+                  <p className="mt-2 text-base text-gray-900">
                     {modeReasoning || analysis.mode_reasoning}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -740,20 +830,20 @@ export default function StudyPlannerPage() {
                       onClick={() =>
                         setMode(aiRecommendedMode ?? "autopilot")
                       }
-                      className="rounded-lg bg-stone-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700"
+                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700"
                     >
                       Accept Recommendation
                     </button>
                     <button
                       type="button"
                       onClick={() => {}}
-                      className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50"
+                      className="rounded-xl border-2 border-blue-200 bg-white px-4 py-2.5 text-base font-semibold text-blue-700 transition hover:bg-blue-50"
                     >
                       Keep My Current Mode
                     </button>
                   </div>
                   {aiRecommendedMode !== null && mode !== aiRecommendedMode && (
-                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-900">
+                    <div className="mt-4 rounded-xl border-2 border-amber-200 bg-amber-50/80 p-4 text-base text-amber-900">
                       {mode === "coach" && aiRecommendedMode === "autopilot"
                         ? "Coach mode selected. Note: based on your diagnostic profile, progress may be slower compared to Autopilot."
                         : "Autopilot mode selected. Note: based on your profile, Coach mode may be sufficient and more flexible."}
@@ -764,22 +854,22 @@ export default function StudyPlannerPage() {
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className={CARD}>
-                  <h3 className="text-sm font-medium text-stone-600">
+                  <h3 className="text-base font-bold text-gray-900">
                     Mastery %
                   </h3>
                   {analysis ? (
-                    <p className="mt-2 text-2xl font-semibold text-stone-800">
+                    <p className="mt-2 text-2xl font-bold text-gray-900">
                       {analysis.mastery_percent}%
                     </p>
                   ) : (
-                    <p className="mt-2 text-sm text-stone-500">
+                    <p className="mt-2 text-base text-gray-600">
                       Complete the diagnostic and analyze answers to see
                       mastery.
                     </p>
                   )}
                 </div>
                 <div className={CARD}>
-                  <h3 className="text-sm font-medium text-stone-600">
+                  <h3 className="text-base font-bold text-gray-900">
                     Weaknesses
                   </h3>
                   {analysis && analysis.weaknesses.length > 0 ? (
@@ -787,24 +877,24 @@ export default function StudyPlannerPage() {
                       {analysis.weaknesses.map((w, i) => (
                         <li
                           key={i}
-                          className="flex flex-wrap items-start gap-2 text-sm"
+                          className="flex flex-wrap items-start gap-2 text-base"
                         >
                           <span
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            className={`shrink-0 rounded-full px-2.5 py-0.5 text-sm font-medium ${
                               w.severity === "high"
                                 ? "bg-red-100 text-red-800"
                                 : w.severity === "medium"
                                   ? "bg-amber-100 text-amber-800"
-                                  : "bg-stone-200 text-stone-700"
+                                  : "bg-blue-200 text-blue-700"
                             }`}
                           >
                             {w.severity}
                           </span>
-                          <span className="font-medium text-stone-700">
+                          <span className="font-semibold text-gray-900">
                             {w.concept_tag}
                           </span>
                           {w.description && (
-                            <span className="text-stone-600">
+                            <span className="text-gray-700">
                               — {w.description}
                             </span>
                           )}
@@ -812,11 +902,11 @@ export default function StudyPlannerPage() {
                       ))}
                     </ul>
                   ) : analysis ? (
-                    <p className="mt-2 text-sm text-stone-500">
+                    <p className="mt-2 text-base text-gray-600">
                       No weaknesses identified.
                     </p>
                   ) : (
-                    <p className="mt-2 text-sm text-stone-500">
+                    <p className="mt-2 text-base text-gray-600">
                       Topics to focus on will appear here after analysis.
                     </p>
                   )}
@@ -824,29 +914,29 @@ export default function StudyPlannerPage() {
               </div>
 
               <div className={CARD}>
-                <h3 className="text-sm font-medium text-stone-600">
+                <h3 className="text-base font-bold text-gray-900">
                   Predicted Score
                 </h3>
                 <div className="mt-3 flex flex-wrap gap-4">
-                  <div className="rounded-lg bg-stone-100 px-3 py-2">
-                    <span className="text-xs text-stone-500">Today</span>
-                    <p className="text-lg font-semibold text-stone-800">
+                  <div className="rounded-xl bg-blue-100/80 px-4 py-3">
+                    <span className="text-sm font-medium text-gray-600">Today</span>
+                    <p className="text-xl font-bold text-gray-900">
                       {analysis?.predicted_score?.today != null
                         ? `${analysis.predicted_score.today}%`
                         : "— %"}
                     </p>
                   </div>
-                  <div className="rounded-lg bg-stone-100 px-3 py-2">
-                    <span className="text-xs text-stone-500">After 7 days</span>
-                    <p className="text-lg font-semibold text-stone-800">
+                  <div className="rounded-xl bg-blue-100/80 px-4 py-3">
+                    <span className="text-sm font-medium text-gray-600">After 7 days</span>
+                    <p className="text-xl font-bold text-gray-900">
                       {analysis?.predicted_score?.after_7_days != null
                         ? `${analysis.predicted_score.after_7_days}%`
                         : "— %"}
                     </p>
                   </div>
-                  <div className="rounded-lg bg-stone-100 px-3 py-2">
-                    <span className="text-xs text-stone-500">After fixing top 3</span>
-                    <p className="text-lg font-semibold text-stone-800">
+                  <div className="rounded-xl bg-blue-100/80 px-4 py-3">
+                    <span className="text-sm font-medium text-gray-600">After fixing top 3</span>
+                    <p className="text-xl font-bold text-gray-900">
                       {analysis?.predicted_score?.after_fixing_top3 != null
                         ? `${analysis.predicted_score.after_fixing_top3}%`
                         : "— %"}
@@ -857,10 +947,10 @@ export default function StudyPlannerPage() {
 
               {analysis?.strong_learner != null && (
                 <div className={CARD}>
-                  <h3 className="text-sm font-medium text-stone-600">
+                  <h3 className="text-base font-bold text-gray-900">
                     Strong Learner
                   </h3>
-                  <p className="mt-2 text-sm text-stone-700">
+                  <p className="mt-2 text-base text-gray-900">
                     {analysis.strong_learner
                       ? "Your profile suggests strong learning habits; Coach mode can help you stay in control while still getting guidance."
                       : "Focus on core gaps first; Autopilot can help structure your practice until foundations are solid."}
@@ -871,10 +961,10 @@ export default function StudyPlannerPage() {
               {analysis?.careless_patterns != null &&
                 analysis.careless_patterns.length > 0 && (
                   <div className={CARD}>
-                    <h3 className="text-sm font-medium text-stone-600">
+                    <h3 className="text-base font-bold text-gray-900">
                       Careless patterns
                     </h3>
-                    <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-stone-600">
+                    <ul className="mt-2 list-inside list-disc space-y-1 text-base text-gray-900">
                       {analysis.careless_patterns.map((p, i) => (
                         <li key={i}>{p}</li>
                       ))}
@@ -884,91 +974,331 @@ export default function StudyPlannerPage() {
 
               {(!analysis || analysis.strong_learner == null) && (
                 <div className={CARD}>
-                  <h3 className="text-sm font-medium text-stone-600">
+                  <h3 className="text-base font-bold text-gray-900">
                     Strong Learner Tools
                   </h3>
-                  <p className="mt-2 text-sm text-stone-500">
+                  <p className="mt-2 text-base text-gray-600">
                     {analysis
                       ? "Recommended tools and techniques will appear here when available."
                       : "Complete the diagnostic and analyze answers to see recommendations."}
                   </p>
                 </div>
               )}
+
+              {analysis && (
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={generatePlan}
+                    disabled={isGeneratingPlan || !currentSubject}
+                    className="rounded-xl bg-blue-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    {isGeneratingPlan ? "Generating…" : "Generate Study Plan"}
+                  </button>
+                  {planError && (
+                    <p className="text-base text-red-600">{planError}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Step 3: Plan */}
-          {step === 3 && (
-            <div className="space-y-6">
-              <h2 className="text-lg font-medium text-stone-800">Plan</h2>
+          {/* Step 3: Plan — planner sheet layout */}
+          {step === 3 && (() => {
+            const planDays = plan?.days ?? [];
+            const totalPlanHours = planDays.reduce((s: number, d: { hours?: number }) => s + (Number(d.hours) || 0), 0);
+            const topicsList = analysis?.weaknesses?.length
+              ? analysis.weaknesses.map((w) => w.concept_tag)
+              : plan?.strategy_summary
+                ? plan.strategy_summary
+                    .split(/[.,;]\s+/)
+                    .filter((s: string) => s.trim().length > 2)
+                    .slice(0, 6)
+                    .map((s: string) => s.trim())
+                : [];
+            const derivedTodos = planDays.length
+              ? planDays.slice(0, 7).map((d: { day: number; focus?: string; method?: string }) =>
+                  `Day ${d.day}: ${d.focus || "Study"}${d.method ? ` — ${d.method}` : ""}`
+                )
+              : [];
+            const todayLabel = typeof window !== "undefined"
+              ? new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+              : "Generated plan";
 
-              <div className="overflow-x-auto">
-                <h3 className="text-sm font-medium text-stone-600 mb-2">
-                  7-day schedule
-                </h3>
-                <table className="w-full min-w-[400px] border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-stone-200">
-                      <th className="text-left py-2 font-medium text-stone-700">
-                        Day
-                      </th>
-                      <th className="text-left py-2 font-medium text-stone-700">
-                        Focus
-                      </th>
-                      <th className="text-left py-2 font-medium text-stone-700">
-                        Hours
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[1, 2, 3, 4, 5, 6, 7].map((d) => (
-                      <tr
-                        key={d}
-                        className="border-b border-stone-100 text-stone-600"
-                      >
-                        <td className="py-2">Day {d}</td>
-                        <td className="py-2">—</td>
-                        <td className="py-2">—</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            return (
+              <div className="rounded-2xl border-2 border-blue-200/80 bg-gradient-to-b from-blue-50/90 to-blue-100/50 p-5 shadow-lg shadow-blue-100/50 sm:p-6">
+                {/* Header row — book mascot on soft background for transparent PNG */}
+                <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b-2 border-blue-200/70 pb-4">
+                  <h2 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight text-gray-900">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-blue-100 shadow-sm ring-2 ring-blue-200/60" aria-hidden>
+                      <Image
+                        src="/branding/neuroplan-book.png"
+                        alt=""
+                        width={44}
+                        height={44}
+                        className="object-contain object-center"
+                      />
+                    </span>
+                    Study Planner
+                  </h2>
+                  <span className="rounded-full bg-blue-200/70 px-3 py-1.5 text-sm font-semibold text-gray-900">
+                    {todayLabel}
+                  </span>
+                </div>
+                <div className="mb-6 rounded-xl border-2 border-blue-200/70 bg-blue-100/80 px-4 py-3.5 text-base italic text-gray-900">
+                  &ldquo;Small steps, big progress.&rdquo;
+                </div>
+
+                <div className="mb-6 border-t-2 border-blue-200/60 pt-6" aria-hidden />
+
+                {/* Main grid — stacked on mobile, 2 cols on lg */}
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  {/* LEFT column */}
+                  <div className="space-y-5">
+                    {/* Time Table (7-day) */}
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                        <span className="mr-2" aria-hidden>🗓️</span>
+                        Time Table (7-day)
+                      </h3>
+                      <div className="space-y-3">
+                        {(plan?.days ?? [1, 2, 3, 4, 5, 6, 7].map((d: number) => ({ day: d, focus: "", hours: 0, method: "" }))).map(
+                          (row: { day: number; focus?: string; hours?: number; method?: string }) => {
+                            const hours = plan?.days ? Number(row.hours) || 0 : 0;
+                            let loadLabel = "";
+                            let loadBadgeClass = "";
+                            if (plan?.days && row.hours != null) {
+                              if (hours >= dailyHours) {
+                                loadLabel = "Full load";
+                                loadBadgeClass = "bg-amber-100 text-amber-800";
+                              } else if (hours < dailyHours * 0.6) {
+                                loadLabel = "Light day";
+                                loadBadgeClass = "bg-sky-100 text-sky-800";
+                              } else {
+                                loadLabel = "Balanced";
+                                loadBadgeClass = "bg-blue-200 text-blue-800";
+                              }
+                            }
+                            return (
+                              <div
+                                key={row.day}
+                                className="flex items-start gap-3 rounded-xl border-2 border-blue-100 bg-blue-50/50 p-3.5 shadow-sm transition-shadow duration-200 hover:shadow-md"
+                              >
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-200 text-base font-bold text-blue-800">
+                                  {row.day}
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-base font-bold text-gray-900">
+                                    {row.focus || "—"}
+                                  </p>
+                                  {row.method && (
+                                    <p className="mt-0.5 text-sm text-gray-600">
+                                      {row.method}
+                                    </p>
+                                  )}
+                                  {loadLabel && (
+                                    <span className={`mt-2 inline-block rounded-full px-2.5 py-0.5 text-sm font-medium ${loadBadgeClass}`}>
+                                      {loadLabel}
+                                    </span>
+                                  )}
+                                </div>
+                                {plan?.days && row.hours != null && (
+                                  <span className="shrink-0 rounded-full bg-blue-300 px-2.5 py-1 text-sm font-semibold text-blue-800">
+                                    {row.hours}h
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Topics to Grasp */}
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                        <span className="mr-2" aria-hidden>✅</span>
+                        Topics to Grasp
+                      </h3>
+                      {topicsList.length > 0 ? (
+                        <ul className="space-y-2">
+                          {topicsList.map((topic: string, i: number) => (
+                            <li key={i} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={planTopicsChecked[i] ?? false}
+                                onChange={() =>
+                                  setPlanTopicsChecked((prev) => ({
+                                    ...prev,
+                                    [i]: !(prev[i] ?? false),
+                                  }))
+                                }
+                                className="h-5 w-5 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
+                              />
+                              <span className="text-base text-gray-900">{topic}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-base text-gray-600">
+                          Generate a plan to see topics here, or complete the diagnostic for weakness-based list.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RIGHT column — divider above on mobile when stacked */}
+                  <div className="space-y-5 border-t-2 border-blue-200/60 pt-6 lg:border-t-0 lg:pt-0">
+                    {/* To-do List */}
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                        <span className="mr-2" aria-hidden>✅</span>
+                        To-do List
+                      </h3>
+                      {derivedTodos.length > 0 ? (
+                        <ul className="space-y-2">
+                          {derivedTodos.map((todo: string, i: number) => (
+                            <li key={i} className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                checked={planTodoChecked[i] ?? false}
+                                onChange={() =>
+                                  setPlanTodoChecked((prev) => ({
+                                    ...prev,
+                                    [i]: !(prev[i] ?? false),
+                                  }))
+                                }
+                                className="mt-0.5 h-5 w-5 shrink-0 rounded border-blue-300 text-blue-600 focus:ring-blue-300"
+                              />
+                              <span className={`text-base ${planTodoChecked[i] ? "text-gray-400 line-through" : "text-gray-900"}`}>
+                                {todo}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-base text-gray-600">
+                          Generate a plan to see daily to-dos here.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Notes */}
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                        <span className="mr-2" aria-hidden>📝</span>
+                        Notes
+                      </h3>
+                      <textarea
+                        value={planNotes}
+                        onChange={(e) => setPlanNotes(e.target.value)}
+                        placeholder="Jot down reminders, resources, or goals..."
+                        rows={4}
+                        className="w-full rounded-xl border-2 border-blue-200 bg-blue-50/50 px-3.5 py-2.5 text-base text-gray-900 placeholder-gray-400 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+
+                    {/* Hours of Study */}
+                    <div className="rounded-2xl border-2 border-blue-200/80 bg-white p-4 shadow-md shadow-blue-100/30">
+                      <h3 className="mb-4 text-lg font-bold text-gray-900">
+                        <span className="mr-2" aria-hidden>⏳</span>
+                        Hours of Study
+                      </h3>
+                      <div className="flex flex-wrap gap-4">
+                        <div className="rounded-xl bg-blue-100/80 px-4 py-3">
+                          <span className="text-sm font-semibold text-gray-600">Daily cap</span>
+                          <p className="text-xl font-bold text-gray-900">{dailyHours}h</p>
+                        </div>
+                        <div className="rounded-xl bg-blue-200/80 px-4 py-3">
+                          <span className="text-sm font-semibold text-gray-600">Plan total</span>
+                          <p className="text-xl font-bold text-gray-900">{totalPlanHours}h</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Why this plan? — compact card with show more */}
+                {(plan?.strategy_summary || plan?.rationale) && (() => {
+                  const toBullets = (text: string) =>
+                    text
+                      .split(/(?<=[.!?])\s+/)
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                  const strategyBullets = plan.strategy_summary ? toBullets(plan.strategy_summary) : [];
+                  const rationaleBullets = plan.rationale ? toBullets(plan.rationale) : [];
+                  const needsToggle =
+                    (plan.strategy_summary?.length ?? 0) + (plan.rationale?.length ?? 0) > 280;
+                  return (
+                    <div className="mt-6 border-t-2 border-blue-200/60 pt-6">
+                      <div className="rounded-xl border-2 border-blue-200/80 bg-white p-4 shadow-sm">
+                        <h3 className="text-base font-bold text-gray-900">
+                          Why this plan?
+                        </h3>
+                        <div
+                          className={`mt-2 text-base text-gray-900 ${!planWhyExpanded ? "line-clamp-6" : ""}`}
+                        >
+                          {plan.strategy_summary && (
+                            <div className={rationaleBullets.length > 0 ? "mb-2" : ""}>
+                              {strategyBullets.length > 1 ? (
+                                <ul className="list-inside list-disc space-y-0.5">
+                                  {strategyBullets.map((s, i) => (
+                                    <li key={i}>{s}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p>{plan.strategy_summary}</p>
+                              )}
+                            </div>
+                          )}
+                          {plan.rationale && (
+                            <div>
+                              {rationaleBullets.length > 1 ? (
+                                <ul className="list-inside list-disc space-y-0.5">
+                                  {rationaleBullets.map((s, i) => (
+                                    <li key={i}>{s}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p>{plan.rationale}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {needsToggle && (
+                          <button
+                            type="button"
+                            onClick={() => setPlanWhyExpanded((e) => !e)}
+                            className="mt-2 text-sm font-semibold text-gray-600 hover:text-gray-900 focus:outline-none focus:underline"
+                          >
+                            {planWhyExpanded ? "Show less" : "Show more"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="mt-6 border-t-2 border-blue-200/60 pt-6">
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full cursor-not-allowed rounded-xl border-2 border-blue-200 bg-blue-100/50 py-3 text-base font-medium text-gray-500 focus:outline-none"
+                  >
+                    Coming next: Calendar export (.ics)
+                  </button>
+                </div>
               </div>
-
-              <div className={CARD}>
-                <h3 className="text-sm font-medium text-stone-600">
-                  Study method recommendations
-                </h3>
-                <p className="mt-2 text-sm text-stone-500">
-                  Placeholder: recommended methods will appear here.
-                </p>
-              </div>
-
-              <div className={CARD}>
-                <h3 className="text-sm font-medium text-stone-600">
-                  Practice set
-                </h3>
-                <p className="mt-2 text-sm text-stone-500">
-                  Placeholder: practice exercises and sets will appear here.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="w-full rounded-lg border border-stone-300 bg-white py-2.5 text-sm font-medium text-stone-700 transition hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:ring-offset-2"
-              >
-                Export .ics
-              </button>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Step navigation */}
-          <div className="mt-6 flex justify-between gap-3 border-t border-stone-200 pt-4">
+          <div className="mt-6 flex justify-between gap-3 border-t-2 border-blue-200 pt-5">
             <button
               type="button"
               onClick={goBack}
               disabled={step === 0}
-              className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50 disabled:opacity-50 disabled:pointer-events-none"
+              className="rounded-xl border-2 border-blue-200 bg-white px-5 py-2.5 text-base font-semibold text-gray-900 transition hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
             >
               Back
             </button>
@@ -976,7 +1306,7 @@ export default function StudyPlannerPage() {
               type="button"
               onClick={goNext}
               disabled={step === 3}
-              className="rounded-lg bg-stone-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 disabled:pointer-events-none"
+              className="rounded-xl bg-blue-600 px-5 py-2.5 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50 disabled:pointer-events-none"
             >
               Next
             </button>

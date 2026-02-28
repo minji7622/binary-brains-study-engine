@@ -1,12 +1,13 @@
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Nunito, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const nunito = Nunito({
+  variable: "--font-nunito",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -15,8 +16,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Study Planner Engine",
-  description: "Configure your study plan and start your diagnostic",
+  title: "NeuroPlan",
+  description: "AI-powered study diagnostics and personalized planning.",
+  icons: {
+    icon: "/favicon.png",
+  },
+  openGraph: {
+    images: ["/branding/neuroplan-main.png"],
+  },
 };
 
 export default function RootLayout({
@@ -27,7 +34,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${nunito.variable} ${geistMono.variable} font-sans antialiased`}
       >
         {children}
       </body>
