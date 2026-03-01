@@ -4,6 +4,27 @@
 
 ---
 
+## Teammates and Roles
+
+Minji:
+
+- Designed NeuroPlan’s system architecture (diagnostic → insight → planning workflow), along with the overall development
+- Implemented AI integration (MiniMax API, structured prompts, JSON validation with Zod)
+- Built reliability mechanisms (timeouts, retries, fallback logic)
+- Designed UI/UX across all core steps
+
+
+Lucas:
+
+- Showcased the entire project to the audience in the video recording.
+- Actively contributed to brainstorming sessions, offering ideas and helping refine the project’s overall direction
+
+Juwon:
+
+- constructed an initial idea for the website
+- created the website logo
+- edited the demo video
+
 ## Overview
 
 NeuroPlan is an AI-based system that combines diagnostic assessment with structured study scheduling.
