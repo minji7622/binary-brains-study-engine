@@ -21,9 +21,9 @@ Lucas:
 
 Juwon:
 
-- constructed an initial idea for the website
-- created the website logo
-- edited the demo video
+- Constructed an initial idea for the website
+- Created the website logo
+- Edited the demo video
 
 ## Overview
 
